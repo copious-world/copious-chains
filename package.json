@@ -1,0 +1,43 @@
+{
+  "name": "copious-chains",
+  "version": "1.0.0",
+  "description": "Endpoint servers providing disk interface and pub/sub interfaces to supported services, e.g counting, wallets, etc.",
+  "main": "service.js",
+  "directories": {
+    "endpoints": "endpoints"
+  },
+  "bin": {
+    "copious-counter": "./bin/endpoint-contacts.js",
+    "copious-wallets": "./bin/endpoint-calendars.js",
+    "add-mini-links": "./bin/add-mini-links.js"
+  },
+  "scripts": {
+    "test": "ava --verbose",
+    "endpoints": "node endpoint-launcher.js relay-service.conf"
+  },
+  "keywords": [
+    "endpoint-server",
+    "contract",
+    "wallet"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/copious-world/copious-blog-entries.git"
+  },
+  "funding": {
+    "type": "GitHub Sponsors",
+    "url": "https://github.com/sponsors/copious-world"
+  },
+  "author": "R. Leddy",
+  "license": "ISC",
+  "dependencies": {
+    "categorical-handlers": "^0.3.9",
+    "event-days": "^0.1.7",
+    "message-relay-websocket": "^0.2.0",
+    "month-utils": "^0.8.1",
+    "ucwid": "^0.2.9"
+  },
+  "devDependencies": {
+    "ava": "^4.3.3"
+  }
+}
