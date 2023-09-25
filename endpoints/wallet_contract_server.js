@@ -1,5 +1,5 @@
 //
-const {TransitionsODBEndpoint} = require("odb-services")
+const {ServeMessageEndpoint} = require("message-relay-services")
 const TreasureInterceptCache = require('treasure-intercept-cache')
 //
 const fs = require('fs')
@@ -8,16 +8,55 @@ const fs = require('fs')
 // connect to a relay service...
 // set by configuration (only one connection, will have two paths.)
 
+
+class MediaConsumerMap {
+
+    constructor() {
+        this.media_to_wallets = {}
+    }
+
+    add_wallet_to_media(media_link,wallet) {
+        let wallet_map = this.media_to_wallets[media_link]
+        if ( wallet_map === undefined ) {
+            wallet_map = {}
+            this.media_to_wallets[media_link] = wallet_map
+        }
+        wallet_map[wallet._tracking] = wallet
+    }
+
+
+    get_wallet_for_media(media_link,w_tracking) {
+        let wallet_map = this.media_to_wallets[media_link]
+        if ( wallet_map ) {
+            let wallet_usage = wallet_map[w_tracking]
+            return wallet_usage ? wallet_usage : false  // not undefined
+        }
+        return false
+    }
+
+    del_wallet_for_media(media_link,w_tracking) {
+        let wallet_map = this.media_to_wallets[media_link]
+        if ( wallet_map ) {
+            delete wallet_map[w_tracking]
+            if ( Object.keys(this.media_to_wallets[media_link]).length === 0 ) {
+                delete this.media_to_wallets[media_link]
+            }
+            return true
+        }
+        return false
+    }
+
+}
+
 // -- -- -- --
 // -- -- -- --
 //
-class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
+class TransitionsWalletEndpoint extends ServeMessageEndpoint {
 
     //
     constructor(conf) {
         super(conf)
         //
-        this.all_wallets = {}
         this.entries_file = `${conf.wallets_directory}/${Date.now()}.json`
         this.entries_sep = ""
         this.app_handles_subscriptions = true
@@ -39,20 +78,105 @@ class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
         }
         //
         this.contracts = new TreasureInterceptCache(conf.treasure) // this will start watching files (in this case contract descriptors)
-    }
+        //
+        this.link_to_wallets = new MediaConsumerMap()
+
+        this.server_id = conf.server_id
+        this.ip = conf.address
     }
 
-    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-    async app_message_handler(msg_obj) {
-        let op = msg_obj._tx_op
-        let result = "OK"
-        let user_id = msg_obj._user_dir_key ? msg_obj[msg_obj._user_dir_key] : msg_obj._id
-        if ( (user_id === undefined) && (msg_obj._id !== undefined) ) {
-            user_id = msg_obj._id
+
+
+
+
+    /**
+     * 
+     * @param {object}} payflow_req 
+     * @returns 
+     */
+    async expect_pay_request(payflow_req) {
+        // a wallet is the media injected by this mini link extension
+        let wallet = this.contracts.has_contract_meta(payflow_req._tracking)
+        if ( wallet ) {
+            //
+            let usage = {
+                "links" : payflow_req.links,
+                "_tracking" : payflow_req._tracking,
+                "payer" : payflow_req.payer,
+                "pay_contract" : payflow_req.pay_contract,
+                "wallet" : wallet // meta descriptor of a wallet plus any executable component references
+            }
+            //
+            // identify by what is being paid for
+            this.link_to_wallets.add_wallet_to_media(payflow_req.links.source.link,usage)
+            return "OK"
         }
-        msg_obj._id = user_id
+        return "ERR"
+    }
+
+
+    /**
+     * 
+     * @param {object} payflow_confirm 
+     */
+    async confirm_payflow(payflow_confirm) {
         //
-        return({ "status" : result, "explain" : `${op} performed`, "when" : Date.now() })
+        // a wallet is the media injected by this mini link extension
+        let wallet = this.contracts.has_contract_meta(payflow_confirm._tracking)
+        if ( wallet ) {
+            let wallet_usage = this.link_to_wallets.get_wallet_for_media(payflow_confirm.links.source.link,wallet._tracking)
+            if ( wallet_usage ) {
+                let wallet = wallet_usage.wallet
+                if ( wallet ) {
+                    //
+                    let asset_key = wallet.chain_service_key   // which blockchain is in use
+                    let resource_identifier = pay_req.links.source.link  // pay for this
+                    let ucwid_to_limits_table = {}
+                    ucwid_to_limits_table[wallet.ccwid] = wallet_usage.pay_contract.amount
+                    let session_key = wallet.session  // this is reset each time the user logs in and this server receives publication...
+                    //
+                    let accepted = await this.contracts.state_transition(asset_key,resource_identifier,this.server_id,session_key)
+                    if ( accepted ) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+
+    async pay_for_streaming(pay_req) {
+        if ( !(this.contracts) ) return "ERR"
+        //
+        let wallet = this.contracts.has_contract_meta(payflow_confirm._tracking) // a wallet is the media injected by this mini link extension
+        if ( wallet ) {
+            let wallet_usage = this.link_to_wallets.get_wallet_for_media(pay_req.links.source.link,wallet._tracking)
+            if ( wallet_usage ) {
+                let wallet = wallet_usage.wallet
+                if ( wallet ) {
+                    //
+                    let asset_key = wallet.chain_service_key   // which blockchain is in use
+                    let resource_identifier = pay_req.links.source.link  // pay for this
+                    let ucwid_to_limits_table = {}
+                    ucwid_to_limits_table[wallet.ccwid] = wallet_usage.pay_contract.amount
+                    let session_key = wallet.session  // this is reset each time the user logs in and this server receives publication...
+                    //
+                    let fundable = await this.contracts.reserve_target_resources(asset_key,resource_identifier,ucwid_to_limits_table,this.server_id,session_key)
+                    if ( fundable ) {
+                        let from_ucwid_to_ucwid_table = {}
+                        from_ucwid_to_ucwid_table[wallet.ccwid] = pay_contract.ucwid
+                        // this transfer should have been already authorized ... 
+                        // this payment model starts with reserved funds and engages a contract that allow for metered release until depletion
+                        await this.contracts.resource_transfer(asset_key,resource_identifier,from_ucwid_to_ucwid_table,this.server_id,session_key)
+                    }
+                    //
+                    return { "ip" : this.ip, "server_id" : this.server_id }
+                }
+            }
+        }
+        //
+        return false
     }
 
 
@@ -120,28 +244,39 @@ class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
 
-    async user_action_keyfile(op,u_obj,field,value) {  // items coming from the editor  (change editor information and publish it back to consumers)
+
+    async app_message_handler(msg_obj) {  // items coming from the editor  (change editor information and publish it back to consumers)
         //
         let asset_info = u_obj[field]   // dashboard+striking@pp.com  profile+striking@pp.com
+        let result = "OK"
+        let data = false
         //
         switch ( op ) {
-            case 'C' : {   // add a wallet to the ledger
+            case 'S' : {   // add a wallet to the ledger
                 //
                 switch ( u_obj._m_path ) {
                     case 'withdraw' : {
+                        //
+                        let status = await this.pay_for_streaming(u_obj)
+                        if ( status === "false" ) {
+                            result = "ERR"
+                        } else {
+                            data = status
+                        }
+                        //                        
                         break;
                     }
-                    case 'wallet' : {
-                        let nowtime =  Date.now()
-                        u_obj.when = nowtime
-                        if ( this.all_wallets[asset_info] === undefined ) this.all_wallets[asset_info] = {}
-                        let keyed_assets = this.all_wallets[asset_info]
-                        keyed_assets[nowtime] = u_obj
-                        //
-                        await this.put_entries(this.entries_file,u_obj)
-                                break;
-                    }
                     case 'payflow' : {
+                        //
+                        result = await this.expect_pay_request(u_obj)
+                        //
+                        break;
+                    }
+                    case 'payflow-confirm' : {
+                        let status = await this.confirm_payflow(u_obj)
+                        if ( status === "false" ) {
+                            result = "ERR"
+                        }
                         break;
                     }
                     default : {
@@ -153,13 +288,29 @@ class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
             }
             case 'G' : {
                 switch ( u_obj._m_path ) {
-                    case 'withdraw' : {
-                        break;
-                    }
-                    case 'wallet' : {
+                    case 'wallets' : {
+                        let wallet = this.contracts.has_contract_meta(u_obj._tracking) // a wallet is the media injected by this mini link extension
+                        if ( wallet ) {
+                            data = wallet
+                        } else {
+                            result = "ERR"
+                        }
                         break;
                     }
                     case 'payflow' : {
+                        let wallet = this.contracts.has_contract_meta(u_obj._tracking) // a wallet is the media injected by this mini link extension
+                        if ( wallet ) {
+                            let wallet_usage = this.link_to_wallets.get_wallet_for_media(u_obj.links.source.link,wallet._tracking)
+                            if ( wallet_usage ) {
+                                let wallet = wallet_usage.wallet
+                                if ( wallet ) {
+                                    data = wallet_usage   // all public information
+                                }
+                            }
+                        }
+                        if ( !data ) {
+                            result = "ERR"
+                        }
                         break;
                     }
                     default : {
@@ -171,21 +322,27 @@ class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
             case 'D' : {        // add a delete action to the ledger
                 //
                 switch ( u_obj._m_path ) {
-                    case 'withdraw' : {
-                        break;
-                    }
-                    case 'wallet' : {
+                    case 'wallets' : {
                         let nowtime =  Date.now()
-                        u_obj.deleted = nowtime
-                        if ( this.all_wallets[asset_info] === undefined ) break
+                        data = nowtime
+                        let wallet = this.contracts.has_contract_meta(u_obj._tracking) // a wallet is the media injected by this mini link extension
+                        if ( wallet === undefined ) break
                         else {
-                            let keyed_assets = this.all_wallets[asset_info]
-                            keyed_assets[nowtime] = u_obj
-                            await this.put_entries(this.entries_file,u_obj)    
+                            let usage = this.get_wallet_for_media(u_obj.links.source,u_obj.payer)
+                            if ( usage ) {
+                                this.link_to_wallets.del_wallet_for_media(u_obj.links.source,usage.wallet._tracking)
+                            }
+                            this.contracts.remove_contract_service(u_obj._tracking)
                         }
                         break;
                     }
                     case 'payflow' : {
+                        if ( this.link_to_wallet ) {
+                            let usage = this.link_to_wallet.get_wallet_for_media(u_obj.pay_contract,u_obj._tracking)
+                            if ( usage ) {
+                                this.link_to_wallet.del_wallet_for_media(u_obj.pay_contract,u_obj._tracking)
+                            }
+                        }
                         break;
                     }
                     default : {
@@ -196,6 +353,7 @@ class TransitionsWalletEndpoint extends TransitionsODBEndpoint {
                 break;
             }
         }
+        return({ "status" : result, "explain" : `${op} performed`, "when" : Date.now(), "data" : data ? data : undefined })
     }
 }
 

@@ -1,8 +1,51 @@
 //
-const {TransitionsODBEndpoint} = require("odb-services")
+const {ServeMessageEndpoint,MultiPathRelayClient} = require("message-relay-services")
 const TreasureInterceptCache = require('treasure-intercept-cache')
 //
 const fs = require('fs')
+
+
+
+class MediaSellerMap {
+
+    constructor() {
+        this.media_to_contracts = {}
+    }
+
+    add_contract_to_media(media_link,contract) {
+        let contract_map = this.media_to_contracts[media_link]
+        if ( contract_map === undefined ) {
+            contract_map = {}
+            this.media_to_contracts[media_link] = contract_map
+        }
+        let c_tracking = wallet._tracking
+        contract_map[c_tracking] = contract
+    }
+
+
+    get_contract_for_media(media_link,c_tracking) {
+        let contract_map = this.media_to_contracts[media_link]
+        if ( contract_map ) {
+            let contract_usage = contract_map[c_tracking]
+            return contract_usage ? contract_usage : false  // not undefined
+        }
+        return false
+    }
+
+    del_contract_for_media(media_link,c_tracking) {
+        let contract_map = this.media_to_contracts[media_link]
+        if ( contract_map ) {
+            delete contract_map[c_tracking]
+            if ( Object.keys(this.media_to_contracts[media_link]).length === 0 ) {
+                delete this.media_to_contracts[media_link]
+            }
+            return true
+        }
+        return false
+    }
+
+}
+
 
 
 // connect to a relay service...
@@ -11,14 +54,15 @@ const fs = require('fs')
 // -- -- -- --
 // -- -- -- --
 //
-class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
+/**
+ * TransitionsCounterEndpoint
+ */
+class TransitionsCounterEndpoint extends ServeMessageEndpoint {
 
     //
     constructor(conf) {
         super(conf)
         //
-        this.all_counters = {}
-        this.all_contracts = {}
         this.entries_file = `${conf.counters_directory}/${Date.now()}.json`
         this.entries_sep = ""
         this.app_handles_subscriptions = true
@@ -39,27 +83,66 @@ class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
             this.topic_producer = this.topic_producer_system
         }
         //
-        this.contracts = new TreasureInterceptCache(conf.treasure)  // this will start watching files (in this case contract descriptors)
-    }
-
-    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-    async app_message_handler(msg_obj) {
-        let op = msg_obj._tx_op
-        let result = "OK"
-        let user_id = msg_obj._user_dir_key ? msg_obj[msg_obj._user_dir_key] : msg_obj._id
-        if ( (user_id === undefined) && (msg_obj._id !== undefined) ) {
-            user_id = msg_obj._id
-        }
-        msg_obj._id = user_id
+        this.wallet_relay = new MultiPathRelayClient(conf.wallet_relayer)   // wallet server will run first
         //
-        return({ "status" : result, "explain" : `${op} performed`, "when" : Date.now() })
+        this.contracts = new TreasureInterceptCache(conf.treasure)  // this will start watching files (in this case contract descriptors)
+        //
+        this.link_to_contracts = new MediaSellerMap()
+    }
+
+
+    /**
+     * store this payflow for 
+     * @param {object} flow_request 
+     * @returns 
+     */
+    async payflow(flow_request) { // 
+        let contract = this.contracts.has_contract_meta(flow_request.pay_contract)
+        if ( contract ) {
+            let usage = {
+                "links" : payflow_req.links,
+                "_tracking" : payflow_req.tracking,
+                "payer" : payflow_req.payer,
+                "pay_contract" : payflow_req.pay_contract,
+                "contract" : contract // meta descriptor of a contract plus any executable component references
+            }
+            this.link_to_contracts.add_contract_to_media(flow_request.pay_contract,usage)
+            let result = await this.wallet_relay.set_on_path(usage,'payflow-confirm')
+            if ( result.status === "OK" ) return true
+        }
+        return false
+    }
+
+
+
+    /**
+     * 
+     * @param {count_req} count_req 
+     */
+    async run_count(count_req) {
+        if ( this.link_to_contracts ) {
+            let usage = this.link_to_contracts.get_contract_for_media(count_req.pay_contract,contract._tracking)
+            if ( usage ) {
+                let contract = usage.contract
+                if ( contract ) {
+                    let {timestamp,asset_key,ucwid,server_id,session_key} = count_req
+                    if ( await this.contracts.check_initialization(asset_key,ucwid,server_id,session_key) ) {
+                        await this.contracts.count_it(timestamp,asset_key,ucwid,server_id,session_key)
+                    }    
+                }
+            }
+        }
     }
 
 
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
 
-    // ----
+    /**
+     * 
+     * @param {*} p_obj 
+     * @returns 
+     */
     app_generate_tracking(p_obj) {
         if ( p_obj._tracking === undefined ) {
             p_obj._tracking = p_obj.ucwid + '-' + Date.now()
@@ -120,27 +203,32 @@ class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
 
-    async user_action_keyfile(op,u_obj,field,value) {  // items coming from the editor  (change editor information and publish it back to consumers)
+
+    /**
+     * 
+     * @param {object} msg_obj - message relay service message object
+     * @returns {object}  - this is the status object expected by server processes and/or the browser client page
+     */
+    async app_message_handler(u_obj) {  // items coming from the editor  (change editor information and publish it back to consumers)
         //
         let asset_info = u_obj[field]   // dashboard+striking@pp.com  profile+striking@pp.com
+        let op = u_obj._tx_op
+        let result = "OK"
+        let data = false
         //
         switch ( op ) {
-            case 'C' : {   // add a counter to the ledger
+            case 'S' : {   // set a propery
                 switch ( u_obj._m_path ) {
                     case 'count' : {
+                        await this.run_count(u_obj)
                         break;
                     }
                     case 'contract' : {
-                        let nowtime =  Date.now()
-                        u_obj.when = nowtime
-                        if ( this.all_contracts[asset_info] === undefined ) this.all_contracts[asset_info] = {}
-                        let keyed_assets = this.all_contracts[asset_info]
-                        keyed_assets[nowtime] = u_obj
-                        //
-                        await this.put_entries(this.entries_file,u_obj)
                         break;
                     }
                     case 'payflow' : {
+                        let status = await this.payflow(u_obj)
+                        result = status ? "OK" : "ERR"
                         break;
                     }
                     default : {
@@ -151,13 +239,24 @@ class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
             }
             case 'G' : {  // get the properties of an item with respect to a path
                 switch ( u_obj._m_path ) {
-                    case 'count' : {
-                        break;
-                    }
                     case 'contract' : {
+                        // search_for_creative
+                        if ( this.link_to_contracts ) {
+                            data = this.contracts.has_contract_meta(u_obj._tracking)
+                        } else {
+                            result = "ERR"
+                        }
                         break;
                     }
                     case 'payflow' : {
+                        if ( this.link_to_contracts ) {
+                            let usage = this.link_to_contracts.get_contract_for_media(count_req.pay_contract,contract._tracking)
+                            if ( usage ) {
+                                data = usage
+                            } else {
+                                result = "ERR"
+                            }
+                        }
                         break;
                     }
                     default : {
@@ -175,15 +274,19 @@ class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
                         break;
                     }
                     case 'contract' : {
-                        if ( this.all_counters[asset_info] === undefined ) break
+                        if ( this.contracts.has_contract_meta(u_obj._tracking) === undefined ) break
                         else {
-                            let keyed_assets = this.all_counters[asset_info]
-                            keyed_assets[nowtime] = u_obj
-                            await this.put_entries(this.entries_file,u_obj)    
+                            this.contracts.remove_contract_service(u_obj._tracking)
                         }
                         break;
                     }
-                    case 'payflow' : { // should establish counting allowance for a media asset with respect to a contract
+                    case 'payflow' : { // should establish counting allowance for a media asset with respect to a contract\
+                        if ( this.link_to_contracts ) {
+                            let usage = this.link_to_contracts.get_contract_for_media(u_obj.pay_contract,u_obj._tracking)
+                            if ( usage ) {
+                                this.link_to_contracts.del_contract_for_media(u_obj.pay_contract,u_obj._tracking)
+                            }
+                        }
                         break;
                     }
                     default : {
@@ -191,12 +294,12 @@ class TransitionsCounterEndpoint extends TransitionsODBEndpoint {
                     }
                 }
                 break;
-
-                //
-                break;
             }
         }
+        //
+        return({ "status" : result, "explain" : `${op} performed`, "when" : Date.now(), "data" : data ? data : undefined })
     }
+    
 }
 
 
