@@ -1,10 +1,11 @@
 //
-const {ServeMessageEndpoint,MultiPathRelayClient} = require("message-relay-services")
+const {ServeMessageEndpoint,MultiPathRelayClient,MessageRelayManager} = require("message-relay-services")
 const TreasureInterceptCache = require('treasure-intercept-cache')
+
+const DEFAULT_CHAIN_WALLET = 'WALLET'
+
 //
 const fs = require('fs')
-
-
 
 class MediaSellerMap {
 
@@ -21,7 +22,6 @@ class MediaSellerMap {
         let c_tracking = wallet._tracking
         contract_map[c_tracking] = contract
     }
-
 
     get_contract_for_media(media_link,c_tracking) {
         let contract_map = this.media_to_contracts[media_link]
@@ -75,13 +75,19 @@ class TransitionsCounterEndpoint extends ServeMessageEndpoint {
         //
         this.app_subscriptions_ok = true
         // ---------------->>  topic, client_name, relayer  (when relayer is false, topics will not be written to self)
-        this.add_to_topic("publish-counter",'self',false)           // allow the client (front end) to use the pub/sub pathway to send state changes
-        this.add_to_topic("delete-counter",'self',false)           // allow the client (front end) to use the pub/sub pathway to send state changes
+        this.add_to_topic("publish-counter",'self',false)   // allow the client (front end) to use the pub/sub pathway to send state changes
+        this.add_to_topic("delete-counter",'self',false)    // allow the client (front end) to use the pub/sub pathway to send state changes
         //
         this.topic_producer = this.topic_producer_user
         if ( conf.system_wide_topics ) {
             this.topic_producer = this.topic_producer_system
         }
+        //
+        this.relay_manager = new MessageRelayManager(conf.wallet_relayer.manager)
+
+        conf.wallet_relayer._connection_manager = this.relay_manager
+        conf.wallet_relayer._connect_label =  conf.wallet_relayer.wallet_cache_relay ?  conf.wallet_relayer._connect_label : DEFAULT_CHAIN_WALLET
+
         //
         this.wallet_relay = new MultiPathRelayClient(conf.wallet_relayer)   // wallet server will run first
         //
