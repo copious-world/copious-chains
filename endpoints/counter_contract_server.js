@@ -13,6 +13,11 @@ class MediaSellerMap {
         this.media_to_contracts = {}
     }
 
+    /**
+     * 
+     * @param {*} media_link 
+     * @param {*} contract 
+     */
     add_contract_to_media(media_link,contract) {
         let contract_map = this.media_to_contracts[media_link]
         if ( contract_map === undefined ) {
@@ -23,6 +28,12 @@ class MediaSellerMap {
         contract_map[c_tracking] = contract
     }
 
+    /**
+     * 
+     * @param {*} media_link 
+     * @param {*} c_tracking 
+     * @returns 
+     */
     get_contract_for_media(media_link,c_tracking) {
         let contract_map = this.media_to_contracts[media_link]
         if ( contract_map ) {
@@ -32,6 +43,12 @@ class MediaSellerMap {
         return false
     }
 
+    /**
+     * 
+     * @param {*} media_link 
+     * @param {*} c_tracking 
+     * @returns 
+     */
     del_contract_for_media(media_link,c_tracking) {
         let contract_map = this.media_to_contracts[media_link]
         if ( contract_map ) {
@@ -161,6 +178,11 @@ class TransitionsCounterEndpoint extends ServeMessageEndpoint {
     // app_subscription_handler
     //  -- Handle state changes...
     // this is the handler for the topics added directory above in the constructor  -- called post publication by endpoint in send_to_all
+    /**
+     * 
+     * @param {*} topic 
+     * @param {*} msg_obj 
+     */
     app_subscription_handler(topic,msg_obj) {
         //
         if ( topic === 'publish-counter' ) {
@@ -181,6 +203,12 @@ class TransitionsCounterEndpoint extends ServeMessageEndpoint {
     }
 
 
+    /**
+     * 
+     * @param {*} topic 
+     * @param {*} msg_obj 
+     * @param {*} ignore 
+     */
     app_publication_pre_fan_response(topic,msg_obj,ignore) {
         if ( topic === 'publish-counter' ) {
             this.user_manage_date('C',msg_obj)
@@ -191,6 +219,12 @@ class TransitionsCounterEndpoint extends ServeMessageEndpoint {
     }
 
     // ----
+    /**
+     * 
+     * @param {*} u_obj 
+     * @param {*} data 
+     * @returns 
+     */
     application_data_update(u_obj,data) {
         return(data)
     }
@@ -198,6 +232,12 @@ class TransitionsCounterEndpoint extends ServeMessageEndpoint {
 
     // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
 
+    /**
+     * 
+     * @param {*} entries_file 
+     * @param {*} entries_record 
+     * @returns 
+     */
     async put_entries(entries_file,entries_record) {
         let entries_record_str = this.entries_sep + JSON.stringify(entries_record) +'\n'    // STORE AS STRING
         this.entries_sep = ','
